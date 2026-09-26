@@ -15,6 +15,7 @@ static float random(float min, float max) {
 typedef struct Value {
     double data;
     double grad;
+    int visited;
     char operator;
     struct Value *prev_v[2];
 }Value;
@@ -26,6 +27,7 @@ static Value* value(const double data, const char operator) {
     v->data = data;
     v->operator = operator;
     v->grad = 0;
+    v->visited = 0;
     v->prev_v[0] = NULL;
     v->prev_v[1] = NULL;
     return v;
@@ -55,22 +57,57 @@ static Value* Tanh(Value *a) {
     return v;
 }
 
-static void backward(Value *a) {
+
+static void topo_helper(Value* v, Value*** list,int* size) {
+    if (v == NULL) return;
+    if (v->visited == 1) return;
+
+    v->visited = 1;
+
+    topo_helper(v->prev_v[0], list, size);
+    topo_helper(v->prev_v[1], list, size);
+
+    (*size)++;
+
+    *list = realloc(*list, sizeof(Value*) * *size);
+
+    (*list)[*size - 1] = v;
+}
+
+static Value** build_topo(Value* v, int *out_size) {
+    int size = 0;
+    Value** topo = NULL;
+
+    topo_helper(v, &topo, &size);
+    *out_size = size;
+
+    for (int i = 0; i < size; i++) {
+        topo[i]->visited = 0;
+    }
+
+    return topo;
+}
+
+static void backward_helper(const Value *a) {
     if (a->operator == '+') {
         a->prev_v[0]->grad += a->grad;
         a->prev_v[1]->grad += a->grad;
-        backward(a->prev_v[0]);
-        backward(a->prev_v[1]);
     }
     else if (a->operator == '*') {
         a->prev_v[0]->grad += a->grad*a->prev_v[1]->data;
         a->prev_v[1]->grad += a->grad*a->prev_v[0]->data;
-        backward(a->prev_v[0]);
-        backward(a->prev_v[1]);
     }
     else if (a->operator == 't') {
         a->prev_v[0]->grad += a->grad * (1-pow(a->data, 2));
-        backward(a->prev_v[0]);
+    }
+}
+
+static void backward(Value* a) {
+    int output_size = 0;
+    Value** list = build_topo(a, &output_size);
+
+    for (int i = output_size -1; i >= 0; i--) {
+        backward_helper(list[i]);
     }
 }
 
@@ -141,6 +178,8 @@ static Value** layers(Value* input[],const Layers_struct Layers) {
 
 
 int main() {
+    srand((unsigned int)time(0));
+    rand();
 
     // 1. Root node z
     Value* z = value(1.0, ' ');
