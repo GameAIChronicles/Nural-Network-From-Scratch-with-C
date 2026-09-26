@@ -77,12 +77,14 @@ static void backward(Value *a) {
 typedef struct Neuron_struct{
     Value **weight;
     Value *bias;
+    int fan_in;
 }Neuron_struct;
 
 
 static Neuron_struct Neuron(const int fan_in) {
     struct Neuron_struct n;
     n.weight = malloc(sizeof(Value*) * fan_in);
+    n.fan_in = fan_in;
 
     for (int i = 0; i < fan_in; i++) {
         n.weight[i] = value(random(-1, 1), '_');
@@ -92,10 +94,10 @@ static Neuron_struct Neuron(const int fan_in) {
     return n;
 }
 
-static Value* neuron(Value* input[], Neuron_struct n, const int fan_in) {
+static Value* neuron(Value* input[], const Neuron_struct n) {
 
     Value* output = value(0.0, '_');
-
+    const int fan_in = n.fan_in;
     for (int i = 0; i < fan_in; i++) {
         Value* wx = mul(input[i], n.weight[i]);
         output = add(output, wx);
@@ -111,30 +113,87 @@ static Value* neuron(Value* input[], Neuron_struct n, const int fan_in) {
 }
 
 
+typedef struct Layers_struct {
+    Neuron_struct* layers;
+    int fan_out;
+}Layers_struct;
 
+static Layers_struct Layers(const int fan_in, const int fan_out) {
+    struct Layers_struct layers;
+    layers.fan_out = fan_out;
+    layers.layers = malloc(sizeof(Neuron_struct)*fan_out);
 
+    for (int i = 0; i < fan_out; i++) {
+        layers.layers[i] = Neuron(fan_in);
+    }
+
+    return layers;
+}
+
+static Value** layers(Value* input[],const Layers_struct Layers) {
+    const int fan_out = Layers.fan_out;
+    Value** output = malloc(sizeof(Value*) * fan_out);
+    for (int i = 0; i < fan_out; i++) {
+        output[i] = neuron(input, Layers.layers[i]);
+    }
+    return output;
+}
 
 
 int main() {
+
+    // 1. Root node z
+    Value* z = value(1.0, ' ');
+    Value* zero = value(0.0, ' ');
+
+    // 2. x = z + 0  (x = 1.0)
+    Value* x = add(z, zero);
+
+    // 3. Two different paths branch out from x
+    Value* three = value(3.0, ' ');
+    Value* four = value(4.0, ' ');
+
+    Value* path_A = mul(x, three); // A = x * 3 = 3.0
+    Value* path_B = mul(x, four);  // B = x * 4 = 4.0
+
+    // 4. Merge them into the final output
+    Value* O = add(path_A, path_B); // O = A + B = 7.0
+
+    // 5. Run backpropagation
+    O->grad = 1.0;
+    backward(O);
+
+    // 6. Print the results to see the bug!
+    printf("--- THE PROOF RESULTS ---\n");
+    printf("x->grad (Eventually adds up): %.3f  [Expected: 7.000]\n", x->grad);
+    printf("z->grad (RUINED BY RECURSION): %.3f [Expected: 7.000]\n", z->grad);
+
+    return 0;
+
+    /*
     srand((unsigned int)time(0));
     rand();
 
     Value* x[2] = {value(2,' '), value(1,'_')};
 
     const int fan_in = 2;
-    const Neuron_struct n1 = Neuron(fan_in);
+    const int fan_out = 2;
+    const Layers_struct l1 = Layers(fan_in, fan_out);
+    const Layers_struct l2 = Layers(fan_in, 1);
 
-    printf("%.3f %.3f %.3f \n", x[0]->grad, x[1]->grad, n1.weight[0]->grad);
+    printf("%.3f %.3f \n", x[0]->grad, x[1]->grad);
 
-    Value* out = neuron(x, n1, fan_in);
+    Value** l1_out = layers(x, l1);
+    Value** out = layers(l1_out, l2);
 
-    out->grad = 1;
-    backward(out);
+    out[0]->grad = 1;
+    backward(out[0]);
 
 
-    printf("%.3f %.3f %.3f %.3f \n", x[0]->grad, x[1]->grad, n1.weight[0]->grad, n1.weight[1]->grad);
+    printf("%.3f %.3f \n", x[0]->grad, x[1]->grad);
 
     return 0;
+    */
 }
 
 
