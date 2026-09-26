@@ -53,3 +53,14 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+
+# CLion and CMake build directories
+.cmake/
+cmake-build-debug/
+cmake-build-release/
+
+# IDE specific files (JetBrains CLion)
+.idea/
+*.iws
+*.iml
