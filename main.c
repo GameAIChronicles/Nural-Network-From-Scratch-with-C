@@ -4,8 +4,10 @@
 #include <time.h>
 
 
+#define SIZE(a) (sizeof(a) / sizeof(a[0]))
 
-static float random(float min, float max) {
+
+static float random(const float min, const float max) {
     float x = (float) rand() / (float) (RAND_MAX);
     x = (x  * (max - min)) + min;
     return x;
@@ -133,9 +135,9 @@ static Neuron_struct Neuron(const int fan_in) {
 
 static Value* neuron(Value* input[], const Neuron_struct n) {
 
-    Value* output = value(0.0, '_');
+    Value *output = mul(input[0], n.weight[0]);
     const int fan_in = n.fan_in;
-    for (int i = 0; i < fan_in; i++) {
+    for (int i = 1; i < fan_in; i++) {
         Value* wx = mul(input[i], n.weight[i]);
         output = add(output, wx);
     }
@@ -151,17 +153,17 @@ static Value* neuron(Value* input[], const Neuron_struct n) {
 
 
 typedef struct Layers_struct {
-    Neuron_struct* layers;
+    Neuron_struct* neurons;
     int fan_out;
 }Layers_struct;
 
 static Layers_struct Layers(const int fan_in, const int fan_out) {
     struct Layers_struct layers;
     layers.fan_out = fan_out;
-    layers.layers = malloc(sizeof(Neuron_struct)*fan_out);
+    layers.neurons = malloc(sizeof(Neuron_struct)*fan_out);
 
     for (int i = 0; i < fan_out; i++) {
-        layers.layers[i] = Neuron(fan_in);
+        layers.neurons[i] = Neuron(fan_in);
     }
 
     return layers;
@@ -171,77 +173,68 @@ static Value** layers(Value* input[],const Layers_struct Layers) {
     const int fan_out = Layers.fan_out;
     Value** output = malloc(sizeof(Value*) * fan_out);
     for (int i = 0; i < fan_out; i++) {
-        output[i] = neuron(input, Layers.layers[i]);
+        output[i] = neuron(input, Layers.neurons[i]);
     }
     return output;
 }
+
+
+typedef struct MLP_struct {
+    int* dimension;
+    Layers_struct* layers;
+    int no_layers;
+}MLP_struct;
+
+
+
+static MLP_struct MLP(const int* dimension,const int no_layers) {
+    MLP_struct mlp;
+    mlp.no_layers = no_layers-1;
+    mlp.dimension = malloc(sizeof(int) * no_layers);
+    mlp.layers = malloc(sizeof(Layers_struct));
+
+    for (int i = 0; i<no_layers-1; i++) {
+        mlp.dimension[i] = dimension[i];
+        mlp.layers = realloc(mlp.layers, sizeof(Layers_struct)*(i+1));
+        mlp.layers[i] = Layers(dimension[i], dimension[i+1]);
+    }
+    mlp.dimension[no_layers-1] = dimension[no_layers-1];
+
+    return mlp;
+}
+
+
+static Value** mlp(Value* input[], const MLP_struct mlp) {
+    Value** out = layers(input, mlp.layers[0]);
+    for (int i = 1; i < mlp.no_layers; i++) {
+        Value** temp = layers(out, mlp.layers[i]);
+        free(out); // Frees the old array of pointers, not the Value nodes themselves!
+        out = temp;
+
+    }
+
+    return out;
+}
+
 
 
 int main() {
     srand((unsigned int)time(0));
     rand();
 
-    // 1. Root node z
-    Value* z = value(1.0, ' ');
-    Value* zero = value(0.0, ' ');
-
-    // 2. x = z + 0  (x = 1.0)
-    Value* x = add(z, zero);
-
-    // 3. Two different paths branch out from x
-    Value* three = value(3.0, ' ');
-    Value* four = value(4.0, ' ');
-
-    Value* path_A = mul(x, three); // A = x * 3 = 3.0
-    Value* path_B = mul(x, four);  // B = x * 4 = 4.0
-
-    // 4. Merge them into the final output
-    Value* O = add(path_A, path_B); // O = A + B = 7.0
-
-    // 5. Run backpropagation
-    O->grad = 1.0;
-    backward(O);
-
-    // 6. Print the results to see the bug!
-    printf("--- THE PROOF RESULTS ---\n");
-    printf("x->grad (Eventually adds up): %.3f  [Expected: 7.000]\n", x->grad);
-    printf("z->grad (RUINED BY RECURSION): %.3f [Expected: 7.000]\n", z->grad);
-
-    return 0;
-
-    /*
-    srand((unsigned int)time(0));
-    rand();
-
     Value* x[2] = {value(2,' '), value(1,'_')};
-
-    const int fan_in = 2;
-    const int fan_out = 2;
-    const Layers_struct l1 = Layers(fan_in, fan_out);
-    const Layers_struct l2 = Layers(fan_in, 1);
-
-    printf("%.3f %.3f \n", x[0]->grad, x[1]->grad);
-
-    Value** l1_out = layers(x, l1);
-    Value** out = layers(l1_out, l2);
-
+    const int structure[] = {2, 1, 1, 1};
+    const int no_layers = SIZE(structure);
+    const MLP_struct nn = MLP(structure, no_layers);
+    Value** out = mlp(x, nn);
     out[0]->grad = 1;
+
+    printf("data of out:%f\n", out[0]->data);
+
     backward(out[0]);
 
 
     printf("%.3f %.3f \n", x[0]->grad, x[1]->grad);
 
     return 0;
-    */
 }
-
-
-
-
-
-
-
-
-
-
-
