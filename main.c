@@ -141,10 +141,7 @@ static Value* neuron(Value* input[], const Neuron_struct n) {
         Value* wx = mul(input[i], n.weight[i]);
         output = add(output, wx);
     }
-
-    for (int i = 0; i < fan_in; i++) {
-
-    }
+    
 
     output = add(output, n.bias);
     output = Tanh(output);
