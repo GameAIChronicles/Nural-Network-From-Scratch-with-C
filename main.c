@@ -242,40 +242,35 @@ int main() {
     srand((unsigned int)time(0));
     rand();
 
-    // 1. Setup inputs and permanent structure (RUNS ONCE)
     Value* x[2] = {value(2,'_'), value(1,'_')};
     const int structure[] = {2, 10, 10, 1};
     const int no_layers = SIZE(structure);
     const MLP_struct nn = MLP(structure, no_layers);
 
-    // FIX: Pull parameter mapping OUTSIDE the training loop so it runs only once!
     Value** param = NULL;
     const int no_param = get_parameter(&param, nn);
     const double learning_rate = 0.01;
     const double target = 0.5; // What we want the network output data to become
 
-    // 2. The Grand Training Loop
     for (int epoch = 0; epoch < 50; epoch++) {
 
-        // --- Forward Pass ---
+        // Forward Pass
         Value** out = mlp(x, nn);
 
         // LOSS
         out[0]->grad = 2.0 * (out[0]->data - target);
 
-        // --- Backward Pass ---
+        // Backward Pass
         int graph_size = 0;
         Value** topo_list = backward(out[0], &graph_size);
 
-        // --- Optimization Step (GRADIENT DESCENT) ---
-        // Your logic goes here: loop through no_param and subtract (lr * grad) from data!
-        for (int i = 0; i < no_param; i++) {
 
+
+        for (int i = 0; i < no_param; i++) {
             param[i]->data -= learning_rate * param[i]->grad;
         }
 
         printf("Epoch %02d | Output: %f\n", epoch + 1, out[0]->data);
-
 
 
 
