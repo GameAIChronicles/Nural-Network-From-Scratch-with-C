@@ -35,7 +35,7 @@ static Value* value(const double data, const char operator) {
     return v;
 }
 
-static Value* add(Value *a, Value *b) {
+static Value* Add(Value *a, Value *b) {
     Value *v = value(a->data + b->data, '+');
 
     v->prev_v[0] = a;
@@ -44,11 +44,37 @@ static Value* add(Value *a, Value *b) {
     return v;
 }
 
-static Value* mul(Value *a, Value *b) {
+static Value* Mul(Value *a, Value *b) {
     Value *v = value(a->data * b->data, '*');
 
     v->prev_v[0] = a;
     v->prev_v[1] = b;
+    return v;
+}
+
+static Value* Div(Value *a, Value *b) {
+    Value *v = value(a->data / b->data, '/');
+    v->prev_v[0] = a;
+    v->prev_v[1] = b;
+    return v;
+}
+
+static Value* Neg(Value *a) {
+    Value *v = value(a->data * -1, '-');
+    v->prev_v[0] = a;
+    return v;
+}
+
+static Value* Log(Value *a) {
+    const double input_data = a->data <= 0.0 ? 1e-7 : a->data;
+    Value *v = value(log(input_data),  'l');
+    v->prev_v[0] = a;
+    return v;
+}
+
+static Value* Exp(Value *a) {
+    Value *v = value(exp(a->data),  'e');
+    v->prev_v[0] = a;
     return v;
 }
 
@@ -95,12 +121,31 @@ static void backward_helper(Value *a) {
         a->prev_v[0]->grad += a->grad;
         a->prev_v[1]->grad += a->grad;
     }
+    else if (a->operator == '-') {
+        a->prev_v[0]->grad -= a->grad;
+    }
     else if (a->operator == '*') {
         a->prev_v[0]->grad += a->grad*a->prev_v[1]->data;
         a->prev_v[1]->grad += a->grad*a->prev_v[0]->data;
     }
     else if (a->operator == 't') {
         a->prev_v[0]->grad += a->grad * (1-pow(a->data, 2));
+    }
+    else if (a->operator == 'e') {
+        a->prev_v[0]->grad += a->grad * a->data;
+    }
+    else if (a->operator == 'l') {
+        a->prev_v[0]->grad += a->grad * (1.0 / a->prev_v[0]->data);
+    }
+    else if (a->operator == '/') {
+        const double u = a->prev_v[0]->data; // numerator
+        const double v = a->prev_v[1]->data; // denominator
+
+        // Gradient flowing back to the numerator: dL/du = dL/dy * (1 / v)
+        a->prev_v[0]->grad += a->grad / v;
+
+        // Gradient flowing back to the denominator: dL/dv = dL/dy * (-u / v^2)
+        a->prev_v[1]->grad += a->grad * (-u / (v * v));
     }
 }
 
@@ -117,13 +162,15 @@ typedef struct Neuron_struct{
     Value **weight;
     Value *bias;
     int fan_in;
+    int is_out;
 }Neuron_struct;
 
 
-static Neuron_struct Neuron(const int fan_in) {
+static Neuron_struct Neuron(const int fan_in,const int is_out) {
     struct Neuron_struct n;
     n.weight = malloc(sizeof(Value*) * fan_in);
     n.fan_in = fan_in;
+    n.is_out = is_out;
 
     for (int i = 0; i < fan_in; i++) {
         n.weight[i] = value(random_float(-1, 1), '_');
@@ -135,16 +182,19 @@ static Neuron_struct Neuron(const int fan_in) {
 
 static Value* neuron(Value* input[], const Neuron_struct n) {
 
-    Value *output = mul(input[0], n.weight[0]);
+    Value *output = Mul(input[0], n.weight[0]);
     const int fan_in = n.fan_in;
     for (int i = 1; i < fan_in; i++) {
-        Value* wx = mul(input[i], n.weight[i]);
-        output = add(output, wx);
+        Value* wx = Mul(input[i], n.weight[i]);
+        output = Add(output, wx);
     }
 
 
-    output = add(output, n.bias);
-    output = Tanh(output);
+    output = Add(output, n.bias);
+
+    if (n.is_out==0) {
+        output = Tanh(output);
+    }
     return output;
 }
 
@@ -154,13 +204,13 @@ typedef struct Layers_struct {
     int fan_out;
 }Layers_struct;
 
-static Layers_struct Layers(const int fan_in, const int fan_out) {
+static Layers_struct Layers(const int fan_in, const int fan_out, const int is_out) {
     struct Layers_struct layers;
     layers.fan_out = fan_out;
     layers.neurons = malloc(sizeof(Neuron_struct)*fan_out);
 
     for (int i = 0; i < fan_out; i++) {
-        layers.neurons[i] = Neuron(fan_in);
+        layers.neurons[i] = Neuron(fan_in, is_out);
     }
 
     return layers;
@@ -193,7 +243,8 @@ static MLP_struct MLP(const int* dimension, const int no_layers) {
 
     for (int i = 0; i < mlp.no_layers; i++) {
         mlp.dimension[i] = dimension[i];
-        mlp.layers[i] = Layers(dimension[i], dimension[i + 1]);
+        printf("The value of is_out: %d\n", i + 1 == no_layers - 1 ? 1 : 0);
+        mlp.layers[i] = Layers(dimension[i], dimension[i + 1], i + 1 == no_layers - 1 ? 1 : 0);
     }
     mlp.dimension[no_layers - 1] = dimension[no_layers - 1];
 
@@ -238,31 +289,65 @@ static int get_parameter(Value** input[],const MLP_struct mlp) {
 }
 
 
+static Value** Softmax(Value** input, const int out_size) {
+
+    Value** exp_input = malloc(sizeof(Value*) * out_size);
+    for (int i = 0; i < out_size; i++) {
+        exp_input[i] = Exp(input[i]);
+    }
+
+    Value* sum = exp_input[0];
+    for (int i = 1; i < out_size; i++) {
+        sum = Add(sum, exp_input[i]);
+    }
+
+    Value** temp = malloc(sizeof(Value*) * out_size);
+    for (int i = 0; i < out_size; i++) {
+        temp[i] = Div(exp_input[i], sum);
+    }
+    free(exp_input);
+    return temp;
+}
+
+static Value* neg_log_likelihood(Value* prob) {
+    Value* out = Neg(Log(prob));
+    return out;
+}
+
+
 int main() {
     srand((unsigned int)time(0));
     rand();
 
     Value* x[2] = {value(2,'_'), value(1,'_')};
-    const int structure[] = {2, 10, 10, 1};
+
+    const int structure[] = {2, 100, 100, 2};
     const int no_layers = SIZE(structure);
+    int output_size = structure[no_layers - 1];
     const MLP_struct nn = MLP(structure, no_layers);
 
     Value** param = NULL;
     const int no_param = get_parameter(&param, nn);
+    printf("No of parameters: %d\n", no_param);
     const double learning_rate = 0.01;
-    const double target = 0.5; // What we want the network output data to become
+    const int target = 0; // Index of What we want the network output data to become
 
-    for (int epoch = 0; epoch < 50; epoch++) {
+    const int epochs = 1000;
+
+    for (int epoch = 0; epoch < epochs; epoch++) {
 
         // Forward Pass
         Value** out = mlp(x, nn);
 
+
+        Value** prob = Softmax(out, output_size);
         // LOSS
-        out[0]->grad = 2.0 * (out[0]->data - target);
+        Value* loss = neg_log_likelihood(prob[target]);
 
         // Backward Pass
+        loss->grad = 1.0;
         int graph_size = 0;
-        Value** topo_list = backward(out[0], &graph_size);
+        Value** topo_list = backward(loss, &graph_size);
 
 
 
@@ -270,24 +355,36 @@ int main() {
             param[i]->data -= learning_rate * param[i]->grad;
         }
 
-        printf("Epoch %02d | Output: %f\n", epoch + 1, out[0]->data);
+        if (epoch % 100 == 0) {
+            printf("Epoch %02d | Output: %f | Loss: %.4f\n", epoch + 1, out[0]->data, loss->data);
+        }
 
-
-
+        // Clear the memory to free the space
         for (int i = 0; i < graph_size; i++) {
             Value* node = topo_list[i];
-            if (node->operator == '+' || node->operator == '*' || node->operator == 't') {
-                free(node);
-            } else {
+            if (node->operator == '+' || node->operator == '*' || node->operator == 't' ||
+                node->operator == '-' || node->operator == 'e' || node->operator == 'l' ||
+                node->operator == '/') {
+                    free(node);
+        }
+            else {
                 node->visited = 0;
                 node->grad = 0.0;
+            }
+        }
+        for (int i = 0; i < output_size; i++) {
+            if (i != target) {
+                free(prob[i]); // Frees the isolated '/' node for the non-target class
             }
         }
 
         free(topo_list);
         free(out);
+        free(prob);
     }
-
+    for(int i = 0; i < no_param; i++) {
+        free(param[i]);
+    }
     free(param);
     return 0;
 }
