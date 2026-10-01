@@ -2,10 +2,12 @@
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 
 
 #define SIZE(a) (sizeof(a) / sizeof(a[0]))
-
+#define MAX_LINE_LEN 1024
+#define COLS 4
 
 static float random_float(const float min, const float max) {
     float x = (float) rand() / (float) (RAND_MAX);
@@ -315,13 +317,95 @@ static Value* neg_log_likelihood(Value* prob) {
 }
 
 
+static Value*** load_dataset(FILE* files, int *out_row_count, Value** output) {
+
+    // User ID,Heart Rate (BPM),Blood Oxygen Level (%),Step Count,Sleep Duration (hours),Activity Level
+
+
+    int max_rows = 4; // Start small, handles any size automatically
+    int row_count = 0;
+    Value ***data_array = malloc(max_rows * sizeof(Value **));
+
+    // Open the text file
+    FILE *file = files;
+    if (file == NULL) {
+        printf("Error: Could not open data.txt\n");
+        return data_array;
+    }
+
+    char line[MAX_LINE_LEN];
+
+    // Read the text file line-by-line
+    while (fgets(line, sizeof(line), file) != NULL) {
+
+        // Expand the array of arrays dynamically if we run out of space
+        if (row_count >= max_rows) {
+            max_rows *= 2;
+            data_array = realloc(data_array, max_rows * sizeof(Value **));
+        }
+
+        // Allocate a new array (row) for the 4 double values
+        data_array[row_count] = malloc(COLS * sizeof(Value*));
+
+        //Parse the comma-separated strings into numbers
+        int col_count = 0;
+        char *token = strtok(line, ",");
+
+        while (token != NULL && col_count < COLS) {
+            // Convert to double to keep full decimal precision
+            data_array[row_count][col_count] = value(strtod(token, NULL), '_');
+            token = strtok(NULL, ",");
+            col_count++;
+        }
+        row_count++;
+    }
+    *out_row_count = row_count;
+    // Always close the file handle
+    fclose(file);
+
+    return data_array;
+
+}
+
+static void free_dataset(Value*** data_array, const int row_count) {
+    if (data_array == NULL) return;
+
+    for (int i = 0; i < row_count; i++) {
+        if (data_array[i] != NULL) {
+            // 1. Free each individual Value node inside the row
+            for (int j = 0; j < COLS; j++) {
+                if (data_array[i][j] != NULL) {
+                    free(data_array[i][j]);
+                }
+            }
+            // 2. Free the array of pointers representing this row
+            free(data_array[i]);
+        }
+    }
+    // 3. Free the root array of pointers
+    free(data_array);
+}
+
+
+
 int main() {
     srand((unsigned int)time(0));
     rand();
 
-    Value* x[2] = {value(2,'_'), value(1,'_')};
+    FILE* file = fopen("D:\\my_project\\Nural-Network-From-Scratch-with-C\\cleaned_dataset.txt", "r");
+    if (file == NULL) {
+        printf("Error: Could not open cleaned_dataset.txt\n");
+        return 1;
+    }
+    int row_count = 0;
 
-    const int structure[] = {2, 100, 100, 2};
+    Value*** data = load_dataset(file, &row_count);
+    row_count -= 2;
+    printf("The no of data in dataset: %d\n", row_count);
+
+
+
+    const int structure[] = {6, 16, 16, 3};
     const int no_layers = SIZE(structure);
     int output_size = structure[no_layers - 1];
     const MLP_struct nn = MLP(structure, no_layers);
@@ -330,61 +414,77 @@ int main() {
     const int no_param = get_parameter(&param, nn);
     printf("No of parameters: %d\n", no_param);
     const double learning_rate = 0.01;
-    const int target = 0; // Index of What we want the network output data to become
 
-    const int epochs = 1000;
+
+    const int epochs = 2;
 
     for (int epoch = 0; epoch < epochs; epoch++) {
+        printf("[");
+        for (int j = 0; j < row_count; j++) {
+            // Forward Pass
 
-        // Forward Pass
-        Value** out = mlp(x, nn);
+            Value** out = mlp(data[j], nn);
+            const int target = data[j][5]->data; // Index of What we want the network output data to become
+
+            Value** prob = Softmax(out, output_size);
+            // LOSS
+            Value* loss = neg_log_likelihood(prob[target]);
+
+            // Backward Pass
+            loss->grad = 1.0;
+            int graph_size = 0;
+            Value** topo_list = backward(loss, &graph_size);
 
 
-        Value** prob = Softmax(out, output_size);
-        // LOSS
-        Value* loss = neg_log_likelihood(prob[target]);
 
-        // Backward Pass
-        loss->grad = 1.0;
-        int graph_size = 0;
-        Value** topo_list = backward(loss, &graph_size);
+            for (int i = 0; i < no_param; i++) {
+                param[i]->data -= learning_rate * param[i]->grad;
+            }
 
+            if (j % 200 == 0) {
+                printf("=");
+            }
 
+            if (row_count -1 == j) {
+                printf("] \nEpoch %02d | Output: %f | Loss: %.4f\n", epoch + 1, out[0]->data, loss->data);
+                Value** out1 = mlp(data[row_count], nn);
+                const int target1 = data[row_count][5]->data; // Index of What we want the network output data to become
 
-        for (int i = 0; i < no_param; i++) {
-            param[i]->data -= learning_rate * param[i]->grad;
-        }
+                Value** prob1 = Softmax(out1, output_size);
+                // LOSS
+                Value* loss1 = neg_log_likelihood(prob1[target1]);
+                printf("Test %02d | Output: %f | Loss: %.4f\n", 1, out1[0]->data, loss1->data);
+            }
 
-        if (epoch % 100 == 0) {
-            printf("Epoch %02d | Output: %f | Loss: %.4f\n", epoch + 1, out[0]->data, loss->data);
-        }
-
-        // Clear the memory to free the space
-        for (int i = 0; i < graph_size; i++) {
-            Value* node = topo_list[i];
-            if (node->operator == '+' || node->operator == '*' || node->operator == 't' ||
-                node->operator == '-' || node->operator == 'e' || node->operator == 'l' ||
-                node->operator == '/') {
+            // Clear the memory to free the space
+            for (int i = 0; i < graph_size; i++) {
+                Value* node = topo_list[i];
+                if (node->operator == '+' || node->operator == '*' || node->operator == 't' ||
+                    node->operator == '-' || node->operator == 'e' || node->operator == 'l' ||
+                    node->operator == '/') {
                     free(node);
-        }
-            else {
-                node->visited = 0;
-                node->grad = 0.0;
+                    }
+                else {
+                    node->visited = 0;
+                    node->grad = 0.0;
+                }
             }
-        }
-        for (int i = 0; i < output_size; i++) {
-            if (i != target) {
-                free(prob[i]); // Frees the isolated '/' node for the non-target class
+            for (int i = 0; i < output_size; i++) {
+                if (i != target) {
+                    free(prob[i]); // Frees the isolated '/' node for the non-target class
+                }
             }
+
+            free(topo_list);
+            free(out);
+            free(prob);
         }
 
-        free(topo_list);
-        free(out);
-        free(prob);
     }
     for(int i = 0; i < no_param; i++) {
         free(param[i]);
     }
     free(param);
     return 0;
+
 }
