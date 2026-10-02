@@ -8,6 +8,7 @@
 #define SIZE(a) (sizeof(a) / sizeof(a[0]))
 #define MAX_LINE_LEN 1024
 #define COLS 4
+#define OUT 3
 
 static float random_float(const float min, const float max) {
     float x = (float) rand() / (float) (RAND_MAX);
@@ -121,7 +122,7 @@ static Value** build_topo(Value* v, int *out_size) {
 
 
 
-static void backward_helper(Value *a) {
+static void backward_helper(const Value *a) {
     if (a->operator == '+') {
         a->prev_v[0]->grad += a->grad;
         a->prev_v[1]->grad += a->grad;
@@ -418,6 +419,25 @@ static void free_dataset(Value*** data_array, const int row_count) {
 }
 
 
+static int find_max_index(Value** arr,const int size) {
+    // If the array is empty, return an invalid index
+    if (size <= 0) {
+        return -1;
+    }
+
+    int max_index = 0;           // Assume the first element is the largest initially
+    double max_val = arr[0]->data;     // Keep track of the maximum value seen so far
+
+    for (int i = 1; i < size; i++) {
+        if (arr[i]->data > max_val) {
+            max_val = arr[i]->data;    // Update the maximum value
+            max_index = i;       // Update the index of the maximum value
+        }
+    }
+
+    return max_index;
+}
+
 
 int main() {
     srand((unsigned int)time(0));
@@ -429,21 +449,18 @@ int main() {
         return 1;
     }
 
-
-
     int row_count = 0;
 
-    Value** Y_Train = NULL;
-    Value*** data = load_dataset(file, &row_count, &Y_Train);
-
-    const int train_count = row_count - 1;
-    // printf("The Y train has the value: %f\n", Y_Train[0]->data);
+    Value** Y_data = NULL;
+    Value*** X_data = load_dataset(file, &row_count, &Y_data);
     printf("The no of data in dataset: %d\n", row_count);
-    // printf("The data test : d[3] %f\n", data[0][3]->data);
 
+    const int train_count = (int)(row_count*.80);
+    const int test_count = row_count - train_count;
+    printf("Train data size %d\n", train_count);
+    printf("Test data size %d\n", test_count);
 
-
-    const int structure[] = {COLS, 16, 16, 3};
+    const int structure[] = {COLS, 16, 16, OUT};
     const int no_layers = SIZE(structure);
     int output_size = structure[no_layers - 1];
     const MLP_struct nn = MLP(structure, no_layers);
@@ -451,8 +468,8 @@ int main() {
     Value** param = NULL;
     const int no_param = get_parameter(&param, nn);
     printf("No of parameters: %d\n", no_param);
-
-    const double learning_rate = 0.01;
+    // ReSharper disable once CppTooWideScope
+    const double learning_rate = 0.005;
     const int epochs = 100;
 
     for (int epoch = 0; epoch < epochs; epoch++) {
@@ -460,8 +477,8 @@ int main() {
         double epoch_loss = 0.0;
         for (int j = 0; j < train_count; j++) {
             // Forward Pass
-            Value** out = mlp(data[j], nn);
-            const int target = (int)Y_Train[j]->data; // Index of What we want the network output data to become
+            Value** out = mlp(X_data[j], nn);
+            const int target = (int)Y_data[j]->data; // Index of What we want the network output data to become
 
             Value** prob = Softmax(out, output_size);
             // LOSS
@@ -491,20 +508,6 @@ int main() {
             if (train_count -1  == j) {
                 epoch_loss = epoch_loss / train_count;
                 printf("] \nEpoch %02d | Prob: %f | Loss: %f\n", epoch + 1, prob[target]->data, epoch_loss);
-                Value** out1 = mlp(data[train_count], nn);
-                const int target1 = (int)Y_Train[train_count]->data; // Index of What we want the network output data to become
-
-                Value** prob1 = Softmax(out1, output_size);
-                // LOSS
-                int test_graph_size = 0;
-                Value* loss1 = neg_log_likelihood(prob1[target1]);
-                Value** test_topo_list = backward(loss1, &test_graph_size);
-
-                printf("Test %02d | Prob: %f | Loss: %.4f\n", epoch + 1, prob1[target1]->data, loss1->data);
-                free(test_topo_list);
-                free(out1);
-                free(prob1);
-                free(loss1);
             }
 
             // Clear the memory to free the space
@@ -531,10 +534,42 @@ int main() {
         }
 
     }
+
+
+    printf("\nTesting the NN with testing data.\n");
+    int correct = 0;
+    double test_loss = 0.0;
+    int count = 0;
+
+    for (int i = train_count; i < row_count; i++) {
+        // Forward Pass
+        Value** out = mlp(X_data[i], nn);
+        const int target = (int)Y_data[i]->data; // Index of What we want the network output data to become
+
+        Value** prob = Softmax(out, output_size);
+
+        // LOSS
+        const Value* loss = neg_log_likelihood(prob[target]);
+        test_loss += loss->data;
+        const int result = find_max_index(prob, OUT);
+        if (result == Y_data[i]->data) {
+            correct++;
+        }
+        count++;
+
+    }
+
+    printf("The correct is %d out of count %d\n", correct, count);
+    const double accuracy = (correct/(float)test_count)*100;
+    test_loss = test_loss / test_count;
+    printf("Result | Loss: %f | Accuracy: %f |\n", test_loss, accuracy);
+
+
     for(int i = 0; i < no_param; i++) {
         free(param[i]);
     }
     free(param);
+    free_dataset(X_data, row_count);
     return 0;
 
 }
