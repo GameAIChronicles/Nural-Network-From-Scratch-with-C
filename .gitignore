@@ -64,5 +64,3 @@ cmake-build-release/
 .idea/
 *.iws
 *.iml
-
-Clean_data.ipynb
