@@ -15,7 +15,6 @@ static float random_float(const float min, const float max) {
     return x;
 }
 
-
 typedef struct Value {
     double data;
     double grad;
@@ -36,6 +35,8 @@ static Value* value(const double data, const char operator) {
     v->prev_v[1] = NULL;
     return v;
 }
+
+
 
 static Value* Add(Value *a, Value *b) {
     Value *v = value(a->data + b->data, '+');
@@ -80,12 +81,12 @@ static Value* Exp(Value *a) {
     return v;
 }
 
-
 static Value* Tanh(Value *a) {
     Value *v = value(tanh(a->data), 't');
     v->prev_v[0] = a;
     return v;
 }
+
 
 
 static void topo_helper(Value* v, Value*** list,int* size) {
@@ -117,6 +118,8 @@ static Value** build_topo(Value* v, int *out_size) {
 
     return topo;
 }
+
+
 
 static void backward_helper(Value *a) {
     if (a->operator == '+') {
@@ -160,13 +163,14 @@ static Value** backward(Value* a, int *out_size) {
     return list; // Return the list straight to main
 }
 
+
+
 typedef struct Neuron_struct{
     Value **weight;
     Value *bias;
     int fan_in;
     int is_out;
 }Neuron_struct;
-
 
 static Neuron_struct Neuron(const int fan_in,const int is_out) {
     struct Neuron_struct n;
@@ -202,6 +206,7 @@ static Value* neuron(Value* input[], const Neuron_struct n) {
 }
 
 
+
 typedef struct Layers_struct {
     Neuron_struct* neurons;
     int fan_out;
@@ -229,13 +234,12 @@ static Value** layers(Value* input[],const Layers_struct Layers) {
 }
 
 
+
 typedef struct MLP_struct {
     int* dimension;
     Layers_struct* layers;
     int no_layers;
 }MLP_struct;
-
-
 
 static MLP_struct MLP(const int* dimension, const int no_layers) {
     MLP_struct mlp;
@@ -254,7 +258,6 @@ static MLP_struct MLP(const int* dimension, const int no_layers) {
     return mlp;
 }
 
-
 static Value** mlp(Value* input[], const MLP_struct mlp) {
     Value** out = layers(input, mlp.layers[0]);
     for (int i = 1; i < mlp.no_layers; i++) {
@@ -266,6 +269,7 @@ static Value** mlp(Value* input[], const MLP_struct mlp) {
 
     return out;
 }
+
 
 
 static int get_parameter(Value** input[],const MLP_struct mlp) {
@@ -290,7 +294,6 @@ static int get_parameter(Value** input[],const MLP_struct mlp) {
     *input = param;
     return no_param;
 }
-
 
 static Value** Softmax(Value** input, const int out_size) {
 
@@ -318,6 +321,7 @@ static Value* neg_log_likelihood(Value* prob) {
 }
 
 
+
 static Value*** load_dataset(FILE* files, int *out_row_count, Value*** Output) {
 
     // User ID,Heart Rate (BPM),Blood Oxygen Level (%),Step Count,Sleep Duration (hours),Activity Level
@@ -328,12 +332,14 @@ static Value*** load_dataset(FILE* files, int *out_row_count, Value*** Output) {
     Value ***data_array = malloc(max_rows * sizeof(Value **));
     *Output = malloc(max_rows * sizeof(Value *));
 
-    // Open the text file
-    FILE *file = files;
-    if (file == NULL) {
-        printf("Error: Could not open data.txt\n");
-        return data_array;
+    double min[COLS] = {0};
+    double max[COLS] = {0};
+    for (int i = 0; i < COLS; i++) {
+        min[i] = 1e9;
+        max[i] = -1e9;
     }
+
+    FILE *file = files;
 
     char line[MAX_LINE_LEN];
 
@@ -358,7 +364,12 @@ static Value*** load_dataset(FILE* files, int *out_row_count, Value*** Output) {
         while (token != NULL && col_count < COLS) {
             // Convert to double to keep full decimal precision
             data_array[row_count][col_count] = value(strtod(token, NULL), '_');
-
+            if (min[col_count] > strtod(token, NULL)) {
+                min[col_count] = strtod(token, NULL);
+            }
+            if (max[col_count] < strtod(token, NULL)) {
+                max[col_count] = strtod(token, NULL);
+            }
             token = strtok(NULL, ",\r\n");
 
             col_count++;
@@ -373,7 +384,11 @@ static Value*** load_dataset(FILE* files, int *out_row_count, Value*** Output) {
 
 
     }
-
+    for (int i = 0; i < row_count; i++) {
+        for (int j = 0; j < COLS; j++) {
+            data_array[i][j]->data = (data_array[i][j]->data - min[j]) / (max[j] - min[j]);
+        }
+    }
 
     *out_row_count = row_count;
     // Always close the file handle
@@ -408,9 +423,9 @@ int main() {
     srand((unsigned int)time(0));
     rand();
 
-    FILE* file = fopen("D:\\my_project\\Nural-Network-From-Scratch-with-C\\cleaned_dataset.txt", "r");
+    FILE* file = fopen("D:\\my_project\\Nural-Network-From-Scratch-with-C\\iris_cleaned.txt", "r");
     if (file == NULL) {
-        printf("Error: Could not open cleaned_dataset.txt\n");
+        printf("Error: Could not open iris_cleaned.txt\n");
         return 1;
     }
 
@@ -420,6 +435,7 @@ int main() {
 
     Value** Y_Train = NULL;
     Value*** data = load_dataset(file, &row_count, &Y_Train);
+
     const int train_count = row_count - 1;
     // printf("The Y train has the value: %f\n", Y_Train[0]->data);
     printf("The no of data in dataset: %d\n", row_count);
@@ -427,7 +443,7 @@ int main() {
 
 
 
-    const int structure[] = {4, 16, 16, 3};
+    const int structure[] = {COLS, 16, 16, 3};
     const int no_layers = SIZE(structure);
     int output_size = structure[no_layers - 1];
     const MLP_struct nn = MLP(structure, no_layers);
@@ -436,7 +452,7 @@ int main() {
     const int no_param = get_parameter(&param, nn);
     printf("No of parameters: %d\n", no_param);
 
-    const double learning_rate = 0.001;
+    const double learning_rate = 0.01;
     const int epochs = 100;
 
     for (int epoch = 0; epoch < epochs; epoch++) {
