@@ -175,7 +175,8 @@ static Neuron_struct Neuron(const int fan_in,const int is_out) {
     n.is_out = is_out;
 
     for (int i = 0; i < fan_in; i++) {
-        n.weight[i] = value(random_float(-1, 1), '_');
+        const float scale = sqrtf(1.0f / (float)fan_in);
+        n.weight[i] = value(random_float(-scale, scale), '_');
     }
 
     n.bias = value(random_float(-1, 1), ' ');
@@ -317,7 +318,7 @@ static Value* neg_log_likelihood(Value* prob) {
 }
 
 
-static Value*** load_dataset(FILE* files, int *out_row_count, Value** output) {
+static Value*** load_dataset(FILE* files, int *out_row_count, Value*** Output) {
 
     // User ID,Heart Rate (BPM),Blood Oxygen Level (%),Step Count,Sleep Duration (hours),Activity Level
 
@@ -325,6 +326,7 @@ static Value*** load_dataset(FILE* files, int *out_row_count, Value** output) {
     int max_rows = 4; // Start small, handles any size automatically
     int row_count = 0;
     Value ***data_array = malloc(max_rows * sizeof(Value **));
+    *Output = malloc(max_rows * sizeof(Value *));
 
     // Open the text file
     FILE *file = files;
@@ -342,6 +344,7 @@ static Value*** load_dataset(FILE* files, int *out_row_count, Value** output) {
         if (row_count >= max_rows) {
             max_rows *= 2;
             data_array = realloc(data_array, max_rows * sizeof(Value **));
+            *Output = realloc(*Output, max_rows * sizeof(Value*));
         }
 
         // Allocate a new array (row) for the 4 double values
@@ -349,16 +352,29 @@ static Value*** load_dataset(FILE* files, int *out_row_count, Value** output) {
 
         //Parse the comma-separated strings into numbers
         int col_count = 0;
-        char *token = strtok(line, ",");
+        char *token = strtok(line, ",\r\n");
+
 
         while (token != NULL && col_count < COLS) {
             // Convert to double to keep full decimal precision
             data_array[row_count][col_count] = value(strtod(token, NULL), '_');
-            token = strtok(NULL, ",");
+
+            token = strtok(NULL, ",\r\n");
+
             col_count++;
         }
+        if (token != NULL) {
+            (*Output)[row_count] = value(strtod(token, NULL), '_');
+        } else {
+            (*Output)[row_count] = value(0.0, '_'); // Fallback if line terminates early
+        }
+
         row_count++;
+
+
     }
+
+
     *out_row_count = row_count;
     // Always close the file handle
     fclose(file);
@@ -397,15 +413,21 @@ int main() {
         printf("Error: Could not open cleaned_dataset.txt\n");
         return 1;
     }
+
+
+
     int row_count = 0;
 
-    Value*** data = load_dataset(file, &row_count);
-    row_count -= 2;
+    Value** Y_Train = NULL;
+    Value*** data = load_dataset(file, &row_count, &Y_Train);
+    const int train_count = row_count - 1;
+    // printf("The Y train has the value: %f\n", Y_Train[0]->data);
     printf("The no of data in dataset: %d\n", row_count);
+    // printf("The data test : d[3] %f\n", data[0][3]->data);
 
 
 
-    const int structure[] = {6, 16, 16, 3};
+    const int structure[] = {4, 16, 16, 3};
     const int no_layers = SIZE(structure);
     int output_size = structure[no_layers - 1];
     const MLP_struct nn = MLP(structure, no_layers);
@@ -413,24 +435,29 @@ int main() {
     Value** param = NULL;
     const int no_param = get_parameter(&param, nn);
     printf("No of parameters: %d\n", no_param);
-    const double learning_rate = 0.01;
 
-
-    const int epochs = 2;
+    const double learning_rate = 0.001;
+    const int epochs = 100;
 
     for (int epoch = 0; epoch < epochs; epoch++) {
         printf("[");
-        for (int j = 0; j < row_count; j++) {
+        double epoch_loss = 0.0;
+        for (int j = 0; j < train_count; j++) {
             // Forward Pass
-
             Value** out = mlp(data[j], nn);
-            const int target = data[j][5]->data; // Index of What we want the network output data to become
+            const int target = (int)Y_Train[j]->data; // Index of What we want the network output data to become
 
             Value** prob = Softmax(out, output_size);
             // LOSS
             Value* loss = neg_log_likelihood(prob[target]);
 
+            epoch_loss += loss->data;
+
             // Backward Pass
+            for (int p = 0; p < no_param; p++) {
+                param[p]->grad = 0.0;
+            }
+
             loss->grad = 1.0;
             int graph_size = 0;
             Value** topo_list = backward(loss, &graph_size);
@@ -441,19 +468,27 @@ int main() {
                 param[i]->data -= learning_rate * param[i]->grad;
             }
 
-            if (j % 200 == 0) {
+            if (j % (train_count/10) == 0) {
                 printf("=");
             }
 
-            if (row_count -1 == j) {
-                printf("] \nEpoch %02d | Output: %f | Loss: %.4f\n", epoch + 1, out[0]->data, loss->data);
-                Value** out1 = mlp(data[row_count], nn);
-                const int target1 = data[row_count][5]->data; // Index of What we want the network output data to become
+            if (train_count -1  == j) {
+                epoch_loss = epoch_loss / train_count;
+                printf("] \nEpoch %02d | Prob: %f | Loss: %f\n", epoch + 1, prob[target]->data, epoch_loss);
+                Value** out1 = mlp(data[train_count], nn);
+                const int target1 = (int)Y_Train[train_count]->data; // Index of What we want the network output data to become
 
                 Value** prob1 = Softmax(out1, output_size);
                 // LOSS
+                int test_graph_size = 0;
                 Value* loss1 = neg_log_likelihood(prob1[target1]);
-                printf("Test %02d | Output: %f | Loss: %.4f\n", 1, out1[0]->data, loss1->data);
+                Value** test_topo_list = backward(loss1, &test_graph_size);
+
+                printf("Test %02d | Prob: %f | Loss: %.4f\n", epoch + 1, prob1[target1]->data, loss1->data);
+                free(test_topo_list);
+                free(out1);
+                free(prob1);
+                free(loss1);
             }
 
             // Clear the memory to free the space
@@ -466,7 +501,6 @@ int main() {
                     }
                 else {
                     node->visited = 0;
-                    node->grad = 0.0;
                 }
             }
             for (int i = 0; i < output_size; i++) {
